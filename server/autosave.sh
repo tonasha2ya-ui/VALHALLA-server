@@ -13,35 +13,72 @@ while true; do
     TIMESTAMP=$(date '+%Y-%m-%d_%H%M%S')
     SENT_SAVE=false
 
-    # Detect tmux session running the server and send save-all
-    if command -v tmux >/dev/null 2>&1; then
-        TMUX_SESSIONS=$(tmux list-sessions -F "#{session_name}" 2>/dev/null || true)
-        TARGET_SESSION=$(echo "$TMUX_SESSIONS" | grep -E 'minecraft|mc|server' | head -n1 || true)
-        if [ -n "$TARGET_SESSION" ]; then
-            tmux send-keys -t "$TARGET_SESSION" "save-all" C-m
-            log "Sent save-all to tmux session: $TARGET_SESSION"
-            SENT_SAVE=true
-            sleep 3
-        fi
-    fi
+    # Improved detection for Minecraft server (Forge 1.20.1 and others)
+    # Patterns to match in java command line
+    JAVA_PATTERN='forge|neoforge|minecraft_server|run.sh|libraries/net/minecraftforge|@libraries|nogui'
 
-    # Detect screen session running the server and send save-all
-    if command -v screen >/dev/null 2>&1; then
-        SCREEN_SESSION=$(screen -ls 2>/dev/null | grep -E 'minecraft|mc|server' | awk '{print $1}' | head -n1 || true)
-        if [ -n "$SCREEN_SESSION" ]; then
-            screen -S "$SCREEN_SESSION" -p 0 -X stuff $'save-all\n'
-            log "Sent save-all to screen session: $SCREEN_SESSION"
-            SENT_SAVE=true
-            sleep 3
-        fi
+    JAVA_MATCHES=$(pgrep -a java 2>/dev/null || true)
+    MATCHED_PIDS=$(echo "$JAVA_MATCHES" | grep -Ei "$JAVA_PATTERN" | awk '{print $1}' || true)
+
+    # helper: walk parent chain and return first ancestor pid matching name
+    find_ancestor_by_name() {
+        pid=$1
+        name=$2
+        while [ "$pid" -ne 1 ] 2>/dev/null; do
+            pcmd=$(tr '\0' ' ' < /proc/$pid/cmdline 2>/dev/null || true)
+            if echo "$pcmd" | grep -qi "$name"; then
+                echo "$pid"
+                return 0
+            fi
+            pid=$(awk '{print $4}' /proc/$pid/stat 2>/dev/null || echo 1)
+        done
+        return 1
+    }
+
+    # attempt to map java process to tmux pane by matching tty
+    if [ -n "$MATCHED_PIDS" ]; then
+        for pid in $MATCHED_PIDS; do
+            # get TTY of the java process (e.g., pts/2)
+            TTY=$(ps -p "$pid" -o tty= 2>/dev/null | tr -d ' ' || true)
+            if [ -n "$TTY" ] && [ "$TTY" != "?" ]; then
+                TTY_PATH="/dev/$TTY"
+            else
+                TTY_PATH=""
+            fi
+
+            # Try tmux: match pane TTY to process TTY
+            if command -v tmux >/dev/null 2>&1; then
+                tmux list-panes -a -F "#{session_name}:#{pane_tty}" 2>/dev/null | while IFS=: read -r session pane_tty; do
+                    if [ -n "$pane_tty" ] && [ -n "$TTY_PATH" ] && [ "$pane_tty" = "$TTY_PATH" ]; then
+                        tmux send-keys -t "$session" "save-all" C-m
+                        log "Sent save-all to tmux session: $session (matched pid $pid tty $TTY_PATH)"
+                        SENT_SAVE=true
+                    fi
+                done
+            fi
+
+            # Try screen: check ancestor chain for screen and map via screen -ls
+            if [ "$SENT_SAVE" = false ] && command -v screen >/dev/null 2>&1; then
+                # if an ancestor is 'screen' get list of screen sessions and try to pick one
+                SCR_ANCESTOR=$(find_ancestor_by_name "$pid" screen || true)
+                if [ -n "$SCR_ANCESTOR" ]; then
+                    # pick the first screen session (best-effort) and send save-all
+                    SCREEN_SESSION_LINE=$(screen -ls 2>/dev/null | grep -E '\.[^\t ]+' | head -n1 || true)
+                    SCREEN_NAME=$(echo "$SCREEN_SESSION_LINE" | awk -F. '{print $2}' | awk '{print $1}' || true)
+                    if [ -n "$SCREEN_NAME" ]; then
+                        screen -S "$SCREEN_NAME" -p 0 -X stuff $'save-all\n' 2>/dev/null || true
+                        log "Sent save-all to screen session: $SCREEN_NAME (matched pid $pid)"
+                        SENT_SAVE=true
+                    fi
+                fi
+            fi
+        done
     fi
 
     if [ "$SENT_SAVE" = false ]; then
-        # Check for a java process that looks like a Minecraft server
-        JAVA_PROCS=$(pgrep -a java 2>/dev/null || true)
-        if echo "$JAVA_PROCS" | grep -Ei 'minecraft|paper|spigot|bukkit|forge|server.jar|fabric' >/dev/null 2>&1; then
-            log "Minecraft java process detected but not running under tmux/screen. Cannot send save-all automatically. PID(s):"
-            echo "$JAVA_PROCS" | sed 's/^/    /' | tee -a "$LOG_FILE"
+        if [ -n "$MATCHED_PIDS" ]; then
+            log "Minecraft java process(es) detected but no tmux/screen session mapped; PID(s):"
+            echo "$JAVA_MATCHES" | grep -Ei "$JAVA_PATTERN" | sed 's/^/    /' | tee -a "$LOG_FILE"
         else
             log "No Minecraft server process detected; skipped save-all."
         fi

@@ -1,18 +1,31 @@
 #!/bin/bash
 
+set -euo pipefail
+
 cd /workspaces/VALHALLA-server/server || exit
 
-while true
-do
-    git add .
+BACKUP_DIR="$PWD/backups/auto"
+mkdir -p "$BACKUP_DIR"
+MAX_BACKUPS=10
 
+while true; do
+    TIMESTAMP=$(date '+%Y-%m-%d_%H%M%S')
+
+    # Create a compressed snapshot (exclude backups and .git)
+    tar --exclude='./backups' --exclude='./.git' -czf "$BACKUP_DIR/server_backup_$TIMESTAMP.tar.gz" .
+
+    # Rotate old backups, keep the most recent $MAX_BACKUPS
+    (cd "$BACKUP_DIR" && ls -1t | sed -e "1,${MAX_BACKUPS}d" | xargs -r rm --)
+
+    # Commit changes locally only (no push)
+    git add .
     if ! git diff --cached --quiet; then
-        git commit -m "Auto Save $(date '+%Y-%m-%d %H:%M:%S')"
-        git push origin main
-        echo "Saved: $(date)"
+        git commit -m "Auto Save $TIMESTAMP"
+        echo "Committed locally: $TIMESTAMP"
     else
-        echo "No changes: $(date)"
+        echo "No changes to commit: $TIMESTAMP"
     fi
 
+    echo "Backup created: $BACKUP_DIR/server_backup_$TIMESTAMP.tar.gz"
     sleep 1800
 done

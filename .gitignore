@@ -1,0 +1,5 @@
+# Ignore autosave backup archives and runtime logs
+backups/
+server/backups/
+autosave.log
+nohup.out

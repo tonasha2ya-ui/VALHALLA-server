@@ -1,0 +1,7 @@
+{
+  "name": "VALHALLA Server",
+  "postStartCommand": "cd /workspaces/VALHALLA-server/server &&
+{
+  "name": "VALHALLA Server",
+  "postStartCommand": "cd /workspaces/VALHALLA-server/server && nohup ./autosave.sh > autosave.log 2>&1 &"
+}

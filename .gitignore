@@ -2,4 +2,5 @@
 backups/
 server/backups/
 autosave.log
+server/autosave.log
 nohup.out

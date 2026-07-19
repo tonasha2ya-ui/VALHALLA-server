@@ -22,6 +22,8 @@ while true; do
     if ! git diff --cached --quiet; then
         git commit -m "Auto Save $TIMESTAMP"
         echo "Committed locally: $TIMESTAMP"
+        # Push commits to remote so backups and changes are stored off-host
+        git push origin main || echo "git push failed: see CI/credentials"
     else
         echo "No changes to commit: $TIMESTAMP"
     fi
